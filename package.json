@@ -1,0 +1,269 @@
+{
+  "name": "ai-feature-source-control",
+  "displayName": "AI Feature Source Control",
+  "description": "AI-powered, repository-scoped Git change grouping with safe staging, privacy controls and commit workflow.",
+  "version": "1.0.0",
+  "publisher": "local-dev",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "source control",
+    "git",
+    "copilot",
+    "codex",
+    "AI",
+    "commit",
+    "feature"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:aiFeatureGroups.view",
+    "onCommand:aiFeatureGroups.classify",
+    "onCommand:aiFeatureGroups.refresh"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiFeatureGroups.classify",
+        "title": "AI Feature Groups: Classify Repository...",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "aiFeatureGroups.refresh",
+        "title": "AI Feature Groups: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiFeatureGroups.chooseProvider",
+        "title": "AI Feature Groups: Choose AI Provider",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "aiFeatureGroups.stageFile",
+        "title": "Stage File",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiFeatureGroups.unstageFile",
+        "title": "Unstage File",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "aiFeatureGroups.stageFeature",
+        "title": "Stage Feature",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiFeatureGroups.unstageFeature",
+        "title": "Unstage Feature",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "aiFeatureGroups.stageSection",
+        "title": "Stage All Changes in Repository",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiFeatureGroups.unstageSection",
+        "title": "Unstage All Staged Changes in Repository",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "aiFeatureGroups.moveToFeature",
+        "title": "Move to Feature...",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "aiFeatureGroups.resetClassification",
+        "title": "Reset File Classification",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "aiFeatureGroups.openDiff",
+        "title": "Open Git Diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "aiFeatureGroups.reclassifyAll",
+        "title": "AI Feature Groups: Reclassify Repository... (Uses More Tokens)",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiFeatureGroups.openSettings",
+        "title": "AI Feature Groups: Open Settings",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "aiFeatureGroups.previewPayload",
+        "title": "AI Feature Groups: Preview Classification Data (No AI Request)",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "aiFeatureGroups.cancelClassification",
+        "title": "AI Feature Groups: Cancel Classification",
+        "icon": "$(debug-stop)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "aiFeatureGroups.classify",
+          "when": "view == aiFeatureGroups.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiFeatureGroups.refresh",
+          "when": "view == aiFeatureGroups.view",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiFeatureGroups.openSettings",
+          "when": "view == aiFeatureGroups.view",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Feature Groups",
+      "properties": {
+        "aiFeatureGroups.provider": {
+          "type": "string",
+          "enum": [
+            "copilot",
+            "codex"
+          ],
+          "default": "copilot",
+          "description": "Use the Copilot VS Code Language Model API or an installed, authenticated Codex CLI."
+        },
+        "aiFeatureGroups.copilotModelId": {
+          "type": "string",
+          "default": "",
+          "description": "Optional exact Copilot Language Model API ID (e.g. from the model picker). Empty: ask which available Copilot model to use. Unsupported or unavailable IDs cause an explicit error."
+        },
+        "aiFeatureGroups.codexModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codex CLI model ID passed as --model on each request. Empty uses the Codex CLI built-in default; availability depends on authentication and plan."
+        },
+        "aiFeatureGroups.codexReasoningEffort": {
+          "type": "string",
+          "enum": [
+            "default",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "default": "default",
+          "description": "Codex CLI reasoning effort passed as -c model_reasoning_effort. Model-dependent: unsupported levels produce a Codex error. \"default\" uses the CLI built-in default. The VS Code Copilot Language Model API does not provide an equivalent documented effort override."
+        },
+        "aiFeatureGroups.codexExecutablePath": {
+          "type": "string",
+          "default": "codex",
+          "description": "Path to the Codex CLI binary. Codex must already be installed and authenticated with `codex login`."
+        },
+        "aiFeatureGroups.detailLevel": {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ],
+          "default": 1,
+          "enumDescriptions": [
+            "Feature \u2192 files",
+            "Feature \u2192 component \u2192 files",
+            "Feature \u2192 component \u2192 task \u2192 files"
+          ],
+          "description": "Semantic depth in Changes by Feature. Display-only: changing this setting never requests AI."
+        },
+        "aiFeatureGroups.autoClassify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reclassify modified files after a configurable delay only in repositories explicitly authorized in this session. False is recommended for strict AI usage control."
+        },
+        "aiFeatureGroups.maxFilesPerBatch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 25,
+          "description": "Maximum number of files sent to the AI in one request."
+        },
+        "aiFeatureGroups.maxDiffCharsPerFile": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 12000,
+          "default": 3200,
+          "description": "Maximum characters of diff content sent per file. Larger diffs are truncated."
+        },
+        "aiFeatureGroups.maxTotalDiffCharsPerClassification": {
+          "type": "integer",
+          "minimum": 2000,
+          "maximum": 300000,
+          "default": 60000,
+          "description": "Maximum Git diff excerpt characters PER REPOSITORY for each explicit classification. Limits input excerpts, not exact tokens; hierarchy levels 1/2/3 share the same analysis."
+        },
+        "aiFeatureGroups.excludedFilePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional glob patterns omitted from AI prompts; files are still shown in the tree. Known credential formats in other diffs are locally redacted but detection is not exhaustive."
+        },
+        "aiFeatureGroups.maxFilesPerClassification": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 80,
+          "description": "Maximum files whose diffs can be sent to the AI for one repository classification. Remaining changes stay visible with cached grouping or Uncategorized."
+        },
+        "aiFeatureGroups.aiRequestTimeoutMs": {
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 300000,
+          "default": 120000,
+          "description": "Maximum duration of one Codex or Copilot classification/commit-message request before it is cancelled (milliseconds)."
+        },
+        "aiFeatureGroups.autoClassifyDelayMs": {
+          "type": "integer",
+          "minimum": 1500,
+          "maximum": 60000,
+          "default": 5000,
+          "description": "Debounce after Git changes before automatic classification (milliseconds). Larger values reduce repeated AI requests."
+        }
+      }
+    },
+    "views": {
+      "scm": [
+        {
+          "id": "aiFeatureGroups.view",
+          "name": "Changes by Feature",
+          "visibility": "visible",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/extension.js && node --check src/controller.js && node --check src/git.js && node --check src/classifier.js && node --check src/providers.js && node --check src/view-model.js && node --check src/feature-view.js && node --check media/webview.js && node --check src/commit-message.js && node --check src/privacy.js && node --check src/ai-errors.js",
+    "test:vscode": "node test/vscode/run.js"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "3.1.0"
+  }
+}
