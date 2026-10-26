@@ -57,7 +57,7 @@ class Controller {
     this.coreSubscriptions.push(this.api.onDidOpenRepository(() => this.syncRepositories()));
     this.coreSubscriptions.push(this.api.onDidCloseRepository(() => this.syncRepositories()));
     this.coreSubscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-      const modelChanged = ['provider', 'copilotModelId', 'codexModel', 'codexReasoningEffort']
+      const modelChanged = ['provider', 'copilotModelId', 'codexModel', 'codexReasoningEffort', 'codexExecutablePath']
         .some(key => event.affectsConfiguration(`aiFeatureGroups.${key}`));
       if (modelChanged) {
         if (this.classifyingRoot) this.cancelRequestedRoots.add(this.classifyingRoot);

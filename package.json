@@ -2,7 +2,7 @@
 	"name": "ai-feature-source-control",
 	"displayName": "AI Feature Source Control",
 	"description": "Group your Git changes by feature using Codex or Copilot. Review diffs, stage files, and manage commits across multiple repositories in VS Code.",
-	"version": "1.0.1",
+	"version": "1.1.0",
 	"publisher": "Rakhim",
 	"icon": "images/icon.png",
 	"private": true,

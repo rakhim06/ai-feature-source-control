@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0 - Automatic Codex detection (2026-10-26)
+
+### Added
+- Automatically detect Codex CLI from the system PATH or the official OpenAI Codex VS Code extension.
+- Support `auto` in `aiFeatureGroups.codexExecutablePath`.
+- Allow users of the official Codex VS Code extension to reuse its bundled executable when compatible.
+
+### Improved
+- Keep explicitly configured executable paths as the highest priority.
+- Provide clearer errors when no compatible Codex executable is found.
+- Preserve existing Codex model, reasoning effort and authentication behavior.
+
 ## v1.0.1 — Marketplace packaging
 
 - Set publisher `Rakhim`, the extension icon and GitHub metadata for Marketplace distribution.

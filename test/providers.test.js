@@ -157,3 +157,51 @@ test('Copilot exceptions are converted to safe error categories', async () => {
     delete require.cache[require.resolve('../src/providers')];
   }
 });
+
+test('Codex provider invokes the binary bundled with the official VS Code extension', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'aifg-provider-ide-binary-'));
+  const originalLoad = Module._load;
+  const savedPath = process.env.PATH;
+  try {
+    const { bundledRelativePath } = require('../src/codex-discovery');
+    const extensionRoot = path.join(temp, 'openai.chatgpt');
+    const executable = path.join(extensionRoot, bundledRelativePath());
+    await fs.mkdir(path.dirname(executable), { recursive: true });
+    await fs.writeFile(executable, `#!${process.execPath}
+const fs=require('node:fs');
+const path=require('node:path');
+const args=process.argv.slice(2);
+const output=args[args.indexOf('--output-last-message')+1];
+const schema=JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
+process.stdin.resume();
+process.stdin.on('end',()=>fs.writeFileSync(output,JSON.stringify(schema.properties.message ?
+  {message:'feat: Support bundled Codex'} :
+  {assignments:[{path:'src/index.ts',group:'feat: Support bundled Codex',component:'Discovery',task:'Locate executable'}]})));
+`);
+    await fs.chmod(executable, 0o755);
+    // Prevent a developer machine with Codex installed from taking priority.
+    process.env.PATH = path.join(temp, 'empty-path');
+    const fakeVSCode = {
+      extensions: { getExtension: name => name === 'openai.chatgpt' ? { extensionPath: extensionRoot } : undefined },
+      workspace: { getConfiguration: () => ({ get: (key, fallback) => ({ codexExecutablePath: 'auto', codexModel: '', codexReasoningEffort: 'default' })[key] ?? fallback }) }
+    };
+    Module._load = function(request, parent, isMain) {
+      if (request === 'vscode') return fakeVSCode;
+      return originalLoad.call(this, request, parent, isMain);
+    };
+    delete require.cache[require.resolve('../src/providers')];
+    const { CodexCliProvider } = require('../src/providers');
+    const provider = new CodexCliProvider();
+    await provider.authorize();
+    const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+    const classified = JSON.parse(await provider.classify('Classify this diff', token));
+    assert.equal(classified.assignments[0].component, 'Discovery');
+    const message = JSON.parse(await provider.generateCommitMessage('Generate commit message', token));
+    assert.equal(message.message, 'feat: Support bundled Codex');
+  } finally {
+    process.env.PATH = savedPath;
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/providers')];
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});

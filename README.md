@@ -56,11 +56,46 @@ Choose your AI provider in the extension settings:
 
 **GitHub Copilot** uses the models available through VS Code's Language Model API.
 
-**OpenAI Codex** uses an installed and authenticated Codex CLI. If you already use Codex in your terminal, you can use the same installation.
+**OpenAI Codex** uses a Codex executable, either installed separately or bundled with the official Codex VS Code extension.
 
 Click the sparkle icon next to a repository to classify its changes. The extension will ask for permission before sending any diffs to the selected provider.
 
 Once classified, you can browse your changes, adjust the groups and stage files as usual.
+
+## Using Codex
+
+Starting with v1.1.0, the extension can automatically find Codex on your machine.
+
+It checks the following locations:
+
+1. A custom executable path, if you've configured one.
+2. The Codex CLI available in your system PATH.
+3. The executable bundled with the official OpenAI Codex VS Code extension.
+
+If you already have Codex installed in VS Code, you may not need to install the CLI separately.
+
+To use automatic detection, set:
+
+```json
+{
+  "aiFeatureGroups.provider": "codex",
+  "aiFeatureGroups.codexExecutablePath": "auto"
+}
+```
+
+You can leave the executable path setting at its existing default as well. No additional configuration is needed when Codex is detected successfully.
+
+If automatic detection fails, you can still provide the full path to your Codex executable:
+
+```json
+{
+  "aiFeatureGroups.codexExecutablePath": "/opt/homebrew/bin/codex"
+}
+```
+
+The executable must be authenticated and support the CLI options used by this extension.
+
+**Note:** The Codex binary bundled with the official VS Code extension is an implementation detail, not a public integration API. Its location or behavior may change in future Codex updates.
 
 ## Settings
 
@@ -71,6 +106,7 @@ For example:
 ```json
 {
   "aiFeatureGroups.provider": "codex",
+  "aiFeatureGroups.codexExecutablePath": "auto",
   "aiFeatureGroups.codexReasoningEffort": "medium",
   "aiFeatureGroups.detailLevel": 2,
   "aiFeatureGroups.autoClassify": false,

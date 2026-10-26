@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { safeProviderFailure, AIRequestError } = require('./ai-errors');
+const { EXTENSION_ID, resolveCodexExecutable } = require('./codex-discovery');
 
 const commitMessageSchema = {
   type: 'object',
@@ -98,8 +99,17 @@ class CopilotProvider {
 
 class CodexCliProvider {
   async authorize() {
-    // This is CLI authentication, NOT access to private VS Code Codex extension APIs.
-    // Authentication may require `codex login` once on the user's machine.
+    // Verify local availability without sending diffs or contacting any model.
+    // The IDE extension's binary shares the usual Codex home, but authentication
+    // is still checked by Codex when a real request is made.
+    await this.findExecutable();
+  }
+
+  async findExecutable() {
+    const preference = vscode.workspace.getConfiguration('aiFeatureGroups')
+      .get('codexExecutablePath', 'auto');
+    const extension = vscode.extensions?.getExtension(EXTENSION_ID);
+    return resolveCodexExecutable({ configured: preference, extension });
   }
 
   async classify(prompt, token) { return this.request(prompt, token, outputSchema); }
@@ -107,8 +117,9 @@ class CodexCliProvider {
   async generateCommitMessage(prompt, token) { return this.request(prompt, token, commitMessageSchema); }
 
   async request(prompt, token, schema) {
-    const executable = vscode.workspace.getConfiguration('aiFeatureGroups')
-      .get('codexExecutablePath', 'codex');
+    // Resolve again for each request: updating the official Codex extension
+    // changes its installation path, but should not require editing settings.
+    const { executable } = await this.findExecutable();
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'vscode-feature-groups-'));
     const schemaFile = path.join(temp, 'schema.json');
     const outputFile = path.join(temp, 'answer.json');
@@ -193,7 +204,7 @@ function runCodex(executable, cwd, schemaFile, outputFile, prompt, token, option
     };
     child.on('error', error => {
       finish(new AIRequestError(error?.code === 'ENOENT' ?
-        'Cannot find Codex CLI. Set aiFeatureGroups.codexExecutablePath to its full path.' :
+        'Codex executable could not be launched. Check the Codex CLI installation or the official Codex VS Code extension.' :
         'Cannot launch Codex CLI. Check its installation and permissions.', 'AI_LAUNCH_FAILURE'));
     });
     child.on('close', code => {
