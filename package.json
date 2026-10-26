@@ -188,8 +188,8 @@
 				},
 				"aiFeatureGroups.codexExecutablePath": {
 					"type": "string",
-					"default": "codex",
-					"description": "Path to the Codex CLI binary. Codex must already be installed and authenticated with `codex login`."
+					"default": "auto",
+					"description": "Automatically detect Codex CLI or the executable bundled with the official Codex VS Code extension. Optionally specify a custom executable path."
 				},
 				"aiFeatureGroups.detailLevel": {
 					"type": "integer",
