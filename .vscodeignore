@@ -1,0 +1,10 @@
+# Ship only runtime files and Marketplace documentation.
+# Runtime uses Node built-ins and vscode; there are no npm runtime dependencies.
+**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!src/**
+!media/**
+!images/icon.png

@@ -1,7 +1,18 @@
 # Changelog
 
+## v1.0.1 — Marketplace packaging
+
+- Set publisher `Rakhim`, the extension icon and GitHub metadata for Marketplace distribution.
+- Package runtime sources, Webview assets, README, license, changelog and icon with the official VS Code packaging tool; exclude development tools and generated files.
+- Align CI packaging and the extension-host test with the published extension identity.
+- No extension functionality changes.
+
 ## v1.0.0 — Stable interface and safety hardening (2026-10-15)
 
+- Added **Open File** (document/arrow) before **Revert** and **Stage** on unstaged files, and before **Unstage** on staged files. Opens the real working-tree file in a separate, non-preview editor tab. Clicking the file row still opens its diff; deleted files receive a clear message rather than opening a nonexistent file.
+
+- Added a **Revert** (back-arrow) button immediately before `+` on each unstaged file and on each repository's `Changes` header. `Staged Changes` never shows Revert. Both operations require explicit confirmation and check for changes while the dialog is open.
+- Revert restores tracked files from the Git index (preserving staged content) and moves untracked files to VS Code's Trash. Merge conflicts are refused rather than silently reset. All operations remain repository-scoped.
 - Single Source Control Webview, with no duplicate Git providers and independent multi-repo staging/commit/sync controls.
 - Removed the advanced `Commit Feature` path: group staging followed by a standard **index-only** commit is the single commit workflow.
 - Revalidate Git state before group/file staging; discard AI classifications if files or branches changed during inference.

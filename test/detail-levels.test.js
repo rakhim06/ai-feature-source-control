@@ -8,7 +8,7 @@ const {
 } = require('../src/classifier');
 const { sectionFor, resolveActionNode } = require('../src/view-model');
 
-const root = '/workspace/hywater-portal-frontend';
+const root = '/workspace/example-web';
 const patches = [
   { path: 'src/export/api.ts', group: 'feat: Asynchronous data exports', component: 'Export API', task: 'Start export requests' },
   { path: 'src/export/validator.ts', group: 'feat: Asynchronous data exports', component: 'Export API', task: 'Validate requests' },

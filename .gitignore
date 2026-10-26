@@ -1,0 +1,19 @@
+node_modules/
+*.vsix
+.DS_Store
+.vscode-test/
+coverage/
+*.log
+__pycache__/
+*.py[cod]
+
+# Local credentials and publishing tokens
+.env
+.env.*
+!.env.example
+.npmrc
+.netrc
+.vsce
+*.pem
+*.key
+*.p12

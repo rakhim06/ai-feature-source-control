@@ -1,0 +1,37 @@
+name: Extension CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install development tools
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax checks
+        run: npm run check
+      - name: Unit and Git integration tests
+        run: npm test
+      - name: Real VS Code extension-host smoke test (headless)
+        run: xvfb-run -a npm run test:vscode
+      - name: Build VSIX
+        run: npm run package -- --out extension.vsix
+      - name: List packaged files
+        run: npm run package:list
+      - name: Verify VSIX integrity
+        run: unzip -t extension.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-feature-source-control-vsix
+          path: extension.vsix
+          if-no-files-found: error

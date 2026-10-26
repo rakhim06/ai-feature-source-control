@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   git, parsePorcelain, listChanges, getDiff,
-  stage, unstage, commitStaged, shouldExclude
+  stage, unstage, commitStaged, shouldExclude, discardSnapshot, discardUnstaged
 } = require('../src/git');
 
 async function withRepo(fn) {
@@ -113,5 +113,68 @@ test('staged and unstaged versions are distinct, and commit only includes index'
     assert.equal(remaining.staged, false);
     assert.equal(remaining.unstaged, true);
     await assert.rejects(commitStaged(root, 'feat: Empty index'), /No staged changes/);
+  });
+});
+
+test('discarding a tracked modification restores the index, not HEAD, even after staging', async () => {
+  await withRepo(async root => {
+    const target = path.join(root, 'component.ts');
+    await fs.writeFile(target, 'HEAD version\n');
+    await git(root, ['add', 'component.ts']);
+    await git(root, ['commit', '-qm', 'initial']);
+    await fs.writeFile(target, 'INDEX version\n');
+    await git(root, ['add', 'component.ts']);
+    await fs.writeFile(target, 'WORKTREE version\n');
+    const [change] = await listChanges(root);
+    assert.equal(change.xy, 'MM');
+    await discardUnstaged(root, [change], async () => { throw new Error('Tracked files must never be trashed'); });
+    assert.equal(await fs.readFile(target, 'utf8'), 'INDEX version\n');
+    assert.equal(await git(root, ['show', ':component.ts']), 'INDEX version\n');
+    assert.equal((await listChanges(root))[0].xy, 'M ');
+  });
+});
+
+test('discarding a tracked deletion restores the file from the index', async () => {
+  await withRepo(async root => {
+    const filename = path.join(root, 'src', 'with spaces.ts');
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, 'source\n');
+    await git(root, ['add', '.']);
+    await git(root, ['commit', '-qm', 'initial']);
+    await fs.unlink(filename);
+    const [change] = await listChanges(root);
+    assert.equal(change.xy, ' D');
+    await discardUnstaged(root, [change], async () => { throw new Error('Should not trash tracked deletes'); });
+    assert.equal(await fs.readFile(filename, 'utf8'), 'source\n');
+    assert.equal((await listChanges(root)).length, 0);
+  });
+});
+
+test('discard snapshot rejects a mid-confirmation worktree edit with unchanged Git status', async () => {
+  await withRepo(async root => {
+    const filename = path.join(root, 'source.txt');
+    await fs.writeFile(filename, 'original\n');
+    await git(root, ['add', '.']);
+    await git(root, ['commit', '-qm', 'initial']);
+    await fs.writeFile(filename, 'first edit\n');
+    const changes = await listChanges(root);
+    const before = await discardSnapshot(root, changes, true);
+    await fs.writeFile(filename, 'second edit\n');
+    const after = await discardSnapshot(root, changes, true);
+    assert.notEqual(after, before);
+    await fs.writeFile(path.join(root, 'new.txt'), 'new untracked file\n');
+    await assert.rejects(discardSnapshot(root, changes, true), /Refresh and retry/);
+  });
+});
+
+test('discard refuses paths outside the repository, staged-only entries and conflicted entries', async () => {
+  await withRepo(async root => {
+    const noTrash = async () => { throw new Error('Must not trash'); };
+    await assert.rejects(discardUnstaged(root, [{ path: '../outside.txt', unstaged: true, xy: ' M' }], noTrash),
+      /outside the selected repository/);
+    await assert.rejects(discardUnstaged(root, [{ path: 'file', staged: true, unstaged: false, xy: 'M ' }], noTrash),
+      /staged-only or conflicted/);
+    await assert.rejects(discardUnstaged(root, [{ path: 'file', unstaged: true, conflicted: true, xy: 'UU' }], noTrash),
+      /staged-only or conflicted/);
   });
 });

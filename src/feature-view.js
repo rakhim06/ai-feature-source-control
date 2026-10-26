@@ -348,13 +348,14 @@ class FeatureWebview {
     if (type === 'push') return this.push(root);
     if (type === 'publish') return this.publishBranch(root);
     if (type === 'action') {
-      const allowed = new Set(['stage', 'unstage', 'diff', 'move', 'moveComponent', 'moveTask', 'reset', 'useMessage']);
+      const allowed = new Set(['stage', 'unstage', 'discard', 'diff', 'openFile', 'move', 'moveComponent', 'moveTask', 'reset', 'useMessage']);
       if (!allowed.has(message.action)) return;
       const node = resolveActionNode(this.controller, message.node);
       if (!node || node.root !== root) return;
       if (message.action === 'stage' && node.phase !== 'work') return;
       if (message.action === 'unstage' && node.phase !== 'index') return;
-      if (['diff', 'move', 'moveComponent', 'moveTask', 'reset'].includes(message.action) && node.kind !== 'file') return;
+      if (message.action === 'discard' && (node.phase !== 'work' || !['file', 'section'].includes(node.kind))) return;
+      if (['diff', 'openFile', 'move', 'moveComponent', 'moveTask', 'reset'].includes(message.action) && node.kind !== 'file') return;
       if (message.action === 'useMessage' && node.kind !== 'feature') return;
       if (message.action === 'useMessage') {
         const native = findGitRepository(this.controller, root);

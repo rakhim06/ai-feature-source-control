@@ -178,6 +178,85 @@ async function unstage(root, changes) {
   }
 }
 
+/** Reject unexpected paths even when called outside of a validated Webview action. */
+function insideRepository(root, filename) {
+  if (typeof filename !== 'string' || !filename || path.isAbsolute(filename) || filename.includes('\0')) {
+    throw new Error('Invalid Git file path.');
+  }
+  const relative = path.relative(path.resolve(root), path.resolve(root, filename));
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Cannot discard changes outside the selected repository.');
+  }
+  return path.join(root, filename);
+}
+
+/**
+ * Snapshot the displayed worktree changes, including index entries and file
+ * metadata. The UI obtains this before a confirmation dialog and compares it
+ * after confirmation to avoid discarding edits made while the dialog was open.
+ * This is not a filesystem lock; Git and other editors can still write later.
+ */
+async function discardSnapshot(root, selected, entireSection = false) {
+  const current = (await listChanges(root)).filter(change => change.unstaged);
+  if (entireSection && (current.length !== selected.length ||
+      current.some(change => !selected.some(old => old.path === change.path && old.xy === change.xy)))) {
+    throw new Error('Git changes have updated. Refresh and retry discarding.');
+  }
+  const checked = [];
+  for (const old of selected) {
+    insideRepository(root, old.path);
+    if (old.originalPath) insideRepository(root, old.originalPath);
+    const change = current.find(item => item.path === old.path && item.xy === old.xy && item.unstaged);
+    if (!change || change.originalPath !== old.originalPath || change.untracked !== old.untracked) {
+      throw new Error('Git changes have updated. Refresh and retry discarding.');
+    }
+    if (change.conflicted) {
+      throw new Error('Resolve merge conflicts separately before discarding changes.');
+    }
+    checked.push(change);
+  }
+  const paths = [...new Set(checked.flatMap(item => [item.path, item.originalPath].filter(Boolean)))];
+  const index = paths.length ? await git(root, ['ls-files', '--stage', '-z', '--', ...paths]) : '';
+  const stats = await Promise.all(paths.map(async filename => {
+    try {
+      const stat = await fs.lstat(insideRepository(root, filename));
+      return [filename, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode, stat.ino];
+    } catch (error) {
+      if (error.code === 'ENOENT') return [filename, 'absent'];
+      throw error;
+    }
+  }));
+  return createHash('sha256').update(JSON.stringify({ checked, index, stats })).digest('hex');
+}
+
+/**
+ * Discard ONLY unstaged changes. Tracked files are restored from the index,
+ * never HEAD, to preserve any already staged changes. Untracked files must be
+ * moved to Trash by the caller (VS Code workspace.fs.delete({useTrash:true})).
+ */
+async function discardUnstaged(root, selected, moveToTrash) {
+  if (!selected.length) return;
+  if (typeof moveToTrash !== 'function') throw new Error('A recoverable Trash operation is required.');
+  const tracked = [];
+  const untracked = [];
+  for (const change of selected) {
+    if (!change.unstaged || change.conflicted) throw new Error('Cannot discard staged-only or conflicted changes.');
+    insideRepository(root, change.path);
+    if (change.originalPath) insideRepository(root, change.originalPath);
+    if (change.untracked) {
+      untracked.push(change.path);
+    } else if (['R', 'C'].includes(change.xy[1]) && change.originalPath) {
+      // Worktree-only rename/copy: restore the index path and trash the new path.
+      if (change.xy[1] === 'R') tracked.push(change.originalPath);
+      untracked.push(change.path);
+    } else {
+      tracked.push(change.path);
+    }
+  }
+  if (tracked.length) await git(root, ['restore', '--worktree', '--', ...new Set(tracked)]);
+  for (const filename of new Set(untracked)) await moveToTrash(insideRepository(root, filename));
+}
+
 async function currentBranch(root) {
   try {
     const name = (await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
@@ -215,5 +294,5 @@ async function readHeadVersion(root, filename) {
 module.exports = {
   git, parsePorcelain, listChanges, shouldExclude, globToRegExp,
   getDiff, getStagedDiff, stage, unstage, commitStaged, currentBranch,
-  readIndexVersion, readHeadVersion, hasHead
+  readIndexVersion, readHeadVersion, hasHead, discardSnapshot, discardUnstaged
 };

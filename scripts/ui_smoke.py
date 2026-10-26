@@ -33,21 +33,21 @@ def group(label, *names):
 
 repos = [
  {
-  'root':'/Users/dev/HyWater/hywater-portal-frontend','name':'hywater-portal-frontend','branch':'SE-2385-export-all-fields',
+  'root':'/Users/dev/projects/example-web','name':'example-web','branch':'feature/async-exports',
   'hasCommit':True,'primaryAction':'commit','message':'feat: Export selected fields', 'dirty':2,'staged':2,
-  'ahead':0,'behind':4,'upstream':'origin/SE-2385-export-all-fields',
+  'ahead':0,'behind':4,'upstream':'origin/feature/async-exports',
   'syncing':False,'fetching':False,'pushing':False,'publishing':False,'committing':False,'generating':False,'switching':False,
   'sections':[section('index','Staged Changes',[group('feat: Export all fields','src/api/export.ts','src/api/export.test.ts')]), section('work','Changes',[])],
  },
  {
-  'root':'/Users/dev/HyWater/hywater-portal-backend','name':'hywater-portal-backend','branch':'fix/session-validation',
+  'root':'/Users/dev/projects/example-api','name':'example-api','branch':'fix/session-validation',
   'hasCommit':True,'primaryAction':'push','message':'','dirty':1,'staged':0,
   'ahead':2,'behind':0,'upstream':'origin/fix/session-validation',
   'syncing':False,'fetching':False,'pushing':False,'publishing':False,'committing':False,'generating':False,'switching':False,
   'sections':[section('index','Staged Changes',[]), section('work','Changes',[group('fix: Season validation','src/api/seasons.ts')])],
  },
  {
-  'root':'/Users/dev/HyWater/hywater-portal-infra','name':'hywater-portal-infra','branch':'feature/new-setup',
+  'root':'/Users/dev/projects/example-infra','name':'example-infra','branch':'feature/new-setup',
   'hasCommit':True,'primaryAction':'publish','message':'','dirty':0,'staged':0,
   'ahead':None,'behind':None,'upstream':None,
   'syncing':False,'fetching':False,'pushing':False,'publishing':False,'committing':False,'generating':False,'switching':False,
@@ -95,6 +95,24 @@ with sync_playwright() as p:
     assert 'Staged Changes' in a.locator('.section-row').inner_text(),repr(a.locator('.section-row').inner_text())
     assert b.locator('.section-row').count()==1, b.locator('.section-row').all_text_contents()
     assert 'Changes' in b.locator('.section-row').inner_text(),repr(b.locator('.section-row').inner_text())
+    # Destructive actions appear before Stage (+), only in the unstaged section.
+    assert [btn.get_attribute('title') for btn in a.locator('.section-row .actions button').all()] == ['Unstage'], 'Staged Changes must not include Revert'
+    assert [btn.get_attribute('title') for btn in b.locator('.section-row .actions button').all()] == ['Revert', 'Stage']
+    assert [btn.get_attribute('title') for btn in b.locator('.file-row .actions button').all()] == ['Open', 'Revert', 'Stage', 'More']
+    assert [btn.get_attribute('title') for btn in a.locator('.file-row').first.locator('.actions button').all()] == ['Open', 'Unstage', 'More']
+    assert b.locator('.file-row .actions button').first.get_attribute('aria-label') == 'Open File'
+    b.locator('.file-row .actions button').first.click()
+    assert page.evaluate('window.sent.at(-1).action') == 'openFile'
+    assert page.evaluate('window.sent.at(-1).node.kind') == 'file'
+    assert page.evaluate('window.sent.at(-1).root') == repos[1]['root']
+    # No staging or reverting occurs when opening a file.
+    b.locator('.file-row .actions button').nth(1).click()
+    assert page.evaluate('window.sent.at(-1).action') == 'discard'
+    assert page.evaluate('window.sent.at(-1).node.kind') == 'file'
+    assert page.evaluate('window.sent.at(-1).root') == repos[1]['root']
+    b.locator('.section-row .actions button').first.click()
+    assert page.evaluate('window.sent.at(-1).action') == 'discard'
+    assert page.evaluate('window.sent.at(-1).node.kind') == 'section'
     assert a.locator('button.sync-action .sync-counts span').all_text_contents()==['4 ↓','0 ↑']
     assert b.locator('button.sync-action .sync-counts span').all_text_contents()==['0 ↓','2 ↑']
     assert c.locator('button.sync-action').get_attribute('disabled') is not None
@@ -116,6 +134,7 @@ with sync_playwright() as p:
     before_level_messages = page.evaluate('window.sent.length')
     assert a.locator('.task-row').count() >= 2
     assert a.locator('.file-row.depth-3').count() == 2
+    b.locator('.file-row').first.hover()
     page.screenshot(path=str(preview),full_page=True)
     for version, level in [(2,2),(3,1),(4,3)]:
         page.evaluate('({version,level})=> window.postMessage({type:"update",version,model:{...window.currentModel,detailLevel:level}},"*")', {'version':version,'level':level})
@@ -144,6 +163,6 @@ with sync_playwright() as p:
     assert a.locator('.section-row').count()==1
     assert 'Changes' in a.locator('.section-row').inner_text(),repr(a.locator('.section-row').inner_text())
     assert not errors, errors
-    print('Chromium integration checks passed: 3 repos; settings-only detail; chevron buttons; per-repo classify; empty sections; sync counts; tooltips; sparkles.')
+    print('Chromium integration checks passed: 3 repos; Open File before Revert and Stage, plus staged file; settings-only detail; chevrons; per-repo classify; empty sections; sync counts; tooltips; sparkles.')
     print('Preview:', preview)
     browser.close()

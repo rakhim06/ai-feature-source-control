@@ -20,9 +20,13 @@ function mockVSCode(roots) {
   const quickPicks = [];
   const errors = [];
   const warnings = [];
+  const infos = [];
   const previews = [];
   const pullFailures = new Set();
   const checkouts = [];
+  const trashed = [];
+  let confirmDiscard = true;
+  let onDiscardPrompt = null;
   const settings = { provider: 'copilot', autoClassify: false,
     maxDiffCharsPerFile: 3200, maxFilesPerBatch: 25, excludedFilePatterns: [] };
   let scmRegistrations = 0;
@@ -113,10 +117,19 @@ function mockVSCode(roots) {
         } }];
     } },
     workspace: {
+      textDocuments: [],
       getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback,
         async update(key, value) { settings[key] = value; } }),
       onDidChangeConfiguration: noop,
-      fs: { stat: uri => fs.stat(uri.fsPath) },
+      fs: {
+        stat: uri => fs.stat(uri.fsPath),
+        async delete(uri, options) {
+          assert.equal(options.useTrash, true, 'Untracked files must be sent to Trash');
+          assert.equal(options.recursive, false);
+          trashed.push({ path: uri.fsPath, contents: await fs.readFile(uri.fsPath, 'utf8') });
+          await fs.unlink(uri.fsPath);
+        }
+      },
       async openTextDocument(options) { previews.push(options); return options; },
       registerTextDocumentContentProvider(scheme, provider) {
         providers.set(scheme, provider); return noop();
@@ -137,9 +150,17 @@ function mockVSCode(roots) {
         views.push(wrapper);
         return { dispose() { const index = views.indexOf(wrapper); if (index !== -1) views.splice(index, 1); } };
       },
-      async showWarningMessage(message, options, button) { warnings.push(message); return button; },
+      async showWarningMessage(message, options, button) {
+        warnings.push(message);
+        if (message.startsWith('Revert ')) {
+          assert.equal(options.modal, true);
+          if (onDiscardPrompt) await onDiscardPrompt();
+          return confirmDiscard ? button : undefined;
+        }
+        return button;
+      },
       async showErrorMessage(message) { errors.push(message); },
-      async showInformationMessage() {},
+      async showInformationMessage(message) { infos.push(message); },
       async showTextDocument(doc) { previews.push({ opened: doc }); },
       async showQuickPick(items, options) { quickPicks.push(items); return options?.title?.startsWith('Switch branch:') ? items.at(-1) : items[0]; },
       async showInputBox(options) { return options.value || 'feat: Test'; }
@@ -149,8 +170,10 @@ function mockVSCode(roots) {
       async executeCommand(name, ...args) { diffCommands.push({ name, args }); }
     }
   };
-  return { vscode, handlers, prompts, settings, views, providers, repositories, diffCommands, syncCalls, quickPicks, errors, warnings, pullFailures, checkouts,
-    previews, get scmRegistrations() { return scmRegistrations; } };
+  return { vscode, handlers, prompts, settings, views, providers, repositories, diffCommands, syncCalls, quickPicks, errors, warnings, pullFailures, checkouts, trashed,
+    setDiscardConfirmation(value) { confirmDiscard = value; },
+    setDiscardPromptHook(value) { onDiscardPrompt = value; },
+    previews, infos, get scmRegistrations() { return scmRegistrations; } };
 }
 
 async function prepareRepo(root, files, commit = false) {
@@ -385,6 +408,104 @@ test('file stage/unstage and diffs use Git index, not virtual paths', async () =
       'export function list() { return []; }\n');
     await view.provider.receive({ type: 'action', root, action: 'unstage', node: staged });
     assert.equal((await listChanges(root)).find(c => c.path === 'api.js').staged, false);
+  });
+});
+
+test('Revert action on one untracked file moves it to Trash and leaves other files untouched', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(fake.trashed.length, 1);
+    assert.equal(fake.trashed[0].path, path.join(root, 'api.js'));
+    await assert.rejects(fs.stat(path.join(root, 'api.js')), { code: 'ENOENT' });
+    const pending = await listChanges(root);
+    assert.equal(pending.some(change => change.path === 'other.js' && change.unstaged), true);
+    assert.equal(pending.some(change => change.staged), false);
+    assert.equal(fake.warnings.some(warning => warning.includes('Revert unstaged changes in api.js?')), true);
+  });
+});
+
+test('Revert restores the working file from the index and does not unstage it', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    await view.provider.receive({ type: 'action', root, action: 'stage',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    const stagedContent = await fs.readFile(path.join(root, 'api.js'), 'utf8');
+    await fs.writeFile(path.join(root, 'api.js'), 'modified after staging\n');
+    await view.provider.controller.refresh();
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(await fs.readFile(path.join(root, 'api.js'), 'utf8'), stagedContent);
+    const state = (await listChanges(root)).find(change => change.path === 'api.js');
+    assert.equal(state.staged, true);
+    assert.equal(state.unstaged, false);
+    assert.equal(fake.trashed.length, 0);
+    // Revert is never exposed on the Staged Changes section.
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'index', 'file', { path: 'api.js' }) });
+    assert.equal((await listChanges(root)).find(c => c.path === 'api.js').staged, true);
+  });
+});
+
+test('Revert on Changes section is repository-scoped and preserves staged files', async () => {
+  await withFakeExtension(async ({ root, extra, fake, view }) => {
+    await view.provider.receive({ type: 'action', root, action: 'stage',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    const stagedContent = await fs.readFile(path.join(root, 'api.js'), 'utf8');
+    await fs.writeFile(path.join(root, 'api.js'), 'unstaged modification\n');
+    await view.provider.controller.refresh();
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'section') });
+    assert.equal(await fs.readFile(path.join(root, 'api.js'), 'utf8'), stagedContent);
+    const changes = await listChanges(root);
+    assert.deepEqual(changes.map(c => c.path), ['api.js']);
+    assert.equal(changes[0].staged, true);
+    assert.equal(changes[0].unstaged, false);
+    assert.equal(fake.trashed.length, 3);
+    assert.equal((await listChanges(extra)).some(change => change.path === 'second.js'), true);
+    assert.equal(fake.warnings.some(msg => msg.includes('Revert all 4 unstaged file(s) in frontend?')), true);
+  }, { extraDirty: true });
+});
+
+test('Revert requires confirmation and rejects a file changed while the dialog was open', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    fake.setDiscardConfirmation(false);
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(fake.trashed.length, 0);
+    fake.setDiscardConfirmation(true);
+    fake.setDiscardPromptHook(async () => fs.writeFile(path.join(root, 'api.js'), 'updated in another editor\n'));
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(await fs.readFile(path.join(root, 'api.js'), 'utf8'), 'updated in another editor\n');
+    assert.equal(fake.trashed.length, 0);
+    assert.equal(fake.warnings.some(msg => msg.includes('Git changes have updated')), true);
+  });
+});
+
+test('Revert refuses to discard a file with unsaved VS Code editor changes', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    fake.vscode.workspace.textDocuments.push({ isDirty: true,
+      uri: fake.vscode.Uri.file(path.join(root, 'api.js')) });
+    await view.provider.receive({ type: 'action', root, action: 'discard',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(fake.trashed.length, 0);
+    assert.equal(await fs.readFile(path.join(root, 'api.js'), 'utf8'), 'export function list() { return []; }\n');
+    assert.equal(fake.warnings.some(message => message.includes('unsaved editor changes')), true);
+  });
+});
+
+test('Revert ignores malicious Webview paths, unsupported phases and groups', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    for (const payload of [
+      node(root, 'work', 'file', { path: '../../etc/passwd' }),
+      node(root, 'work', 'file', { path: '.git/config' }),
+      node(root, 'index', 'file', { path: 'api.js' }),
+      node(root, 'work', 'feature', { name: 'feat: Export all fields' })
+    ]) {
+      await view.provider.receive({ type: 'action', root, action: 'discard', node: payload });
+    }
+    assert.equal(fake.trashed.length, 0);
+    assert.equal((await listChanges(root)).some(change => change.path === 'api.js'), true);
   });
 });
 
@@ -783,5 +904,72 @@ test('stale Git status is rejected before staging, rather than staging a mismatc
     assert.ok(fake.warnings.some(message => message.includes('updated')));
     const after = await listChanges(root);
     assert.deepEqual(after, before);
+  });
+});
+
+
+test('Open File opens the working-tree file in a pinned normal editor, not a diff', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    const before = await listChanges(root);
+    await view.provider.receive({ type: 'action', root, action: 'openFile',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    const opens = fake.diffCommands.filter(call => call.name === 'vscode.open');
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0].args[0].fsPath, path.join(root, 'api.js'));
+    assert.deepEqual(opens[0].args[1], { preview: false });
+    assert.equal(fake.diffCommands.some(call => call.name === 'vscode.diff'), false);
+    assert.deepEqual(await listChanges(root), before, 'Opening a file must not alter Git status');
+    // Clicking the filename continues to show a diff, unaffected by Open File.
+    await view.provider.receive({ type: 'action', root, action: 'diff',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.ok(fake.diffCommands.some(call => call.name === 'vscode.diff'));
+  });
+});
+
+test('Open File on staged files still opens the editable worktree, scoped to the correct repository', async () => {
+  await withFakeExtension(async ({ root, extra, fake, view }) => {
+    await git(root, ['add', '--', 'api.js']);
+    await view.provider.controller.refresh();
+    await view.provider.receive({ type: 'action', root, action: 'openFile',
+      node: node(root, 'index', 'file', { path: 'api.js' }) });
+    await view.provider.receive({ type: 'action', root: extra, action: 'openFile',
+      node: node(extra, 'work', 'file', { path: 'second.js' }) });
+    const opens = fake.diffCommands.filter(call => call.name === 'vscode.open');
+    assert.deepEqual(opens.map(call => call.args[0].fsPath), [path.join(root, 'api.js'), path.join(extra, 'second.js')]);
+    assert.ok(opens.every(call => call.args[0].scheme === 'file' && call.args[1].preview === false));
+    assert.equal(fake.diffCommands.some(call => call.name === 'vscode.diff'), false);
+    const tracked = (await listChanges(root)).find(change => change.path === 'api.js');
+    assert.equal(tracked.staged, true, 'Opening staged file must not unstage it');
+    assert.equal(fake.scmRegistrations, 0, 'No duplicate Source Control providers');
+  }, { extraDirty: true });
+});
+
+test('Open File ignores fabricated paths and nonfile nodes sent from the Webview', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    for (const forged of [
+      node(root, 'work', 'file', { path: '../private.txt' }),
+      node(root, 'work', 'file', { path: '/etc/hosts' }),
+      node('/not/open/repo', 'work', 'file', { path: 'api.js' }),
+      node(root, 'work', 'section')
+    ]) {
+      await view.provider.receive({ type: 'action', root: forged.root, action: 'openFile', node: forged });
+    }
+    assert.equal(fake.diffCommands.filter(call => call.name === 'vscode.open').length, 0);
+    assert.equal(fake.errors.length, 0);
+  });
+});
+
+test('Open File on a deleted file does not create an editor for a nonexistent path', async () => {
+  await withFakeExtension(async ({ root, fake, view }) => {
+    await git(root, ['add', '--', 'api.js']);
+    await git(root, ['commit', '-qm', 'track file']);
+    await fs.rm(path.join(root, 'api.js'));
+    await view.provider.controller.refresh();
+    const deleted = (await listChanges(root)).find(change => change.path === 'api.js');
+    assert.equal(deleted.deleted, true);
+    await view.provider.receive({ type: 'action', root, action: 'openFile',
+      node: node(root, 'work', 'file', { path: 'api.js' }) });
+    assert.equal(fake.diffCommands.filter(call => call.name === 'vscode.open').length, 0);
+    assert.match(fake.infos.at(-1), /no longer exists in the working tree/);
   });
 });

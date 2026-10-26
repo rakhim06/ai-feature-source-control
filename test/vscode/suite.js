@@ -16,14 +16,15 @@ async function waitFor(predicate, timeout = 30000) {
 }
 
 async function run() {
-  const ext = vscode.extensions.getExtension('local-dev.ai-feature-source-control');
+  const { publisher, name } = require('../../package.json');
+  const ext = vscode.extensions.getExtension(`${publisher}.${name}`);
   assert.ok(ext, 'development extension is available');
   await ext.activate();
   assert.equal(ext.isActive, true);
   const apiExt = vscode.extensions.getExtension('vscode.git');
   assert.ok(apiExt);
   const api = (await apiExt.activate()).getAPI(1);
-  const expected = [process.env.AIFG_E2E_REPO_ONE, process.env.AIFG_E2E_REPO_TWO].map(path.resolve);
+  const expected = [process.env.AIFG_E2E_REPO_ONE, process.env.AIFG_E2E_REPO_TWO].map(root => path.resolve(root));
   const found = await waitFor(() => {
     const roots = api.repositories.map(repo => path.resolve(repo.rootUri.fsPath));
     return expected.every(root => roots.includes(root)) ? roots : null;

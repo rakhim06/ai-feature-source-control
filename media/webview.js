@@ -23,6 +23,10 @@
     file: '<path d="M5 2h8l5 5v15H5zM13 2v6h5"/>',
     repo: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/>',
     add: '<path d="M12 4v16M4 12h16"/>',
+    // Open a working-tree file in a normal editor tab (not the Git diff).
+    openFile: '<path d="M12 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M12 3v5h5"/><path d="M13 13l8-8m-5 0h5v5"/>',
+    // Counterclockwise back-arrow, matching the native SCM Discard action.
+    discard: '<path d="M3 11a9 9 0 1 1 2.4 6.2"/><path d="M3 4v7h7"/>',
     remove: '<path d="M4 12h16"/>',
     more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
     sync: '<path d="M4 7a8 8 0 0 1 14-2l2 2M20 17a8 8 0 0 1-14 2l-2-2"/><path d="M20 3v4h-4M4 21v-4h4"/>',
@@ -102,7 +106,8 @@
     const buttons = element('span', 'actions');
     for (const entry of actions) {
       const label = entry.action === 'stage' ? 'Stage' : entry.action === 'unstage' ? 'Unstage' : entry.label;
-      buttons.append(actionButton(entry.icon, label, () => action(entry.action, node), 'action', entry.label));
+      buttons.append(actionButton(entry.icon, label, () => action(entry.action, node), 'action',
+        entry.action === 'openFile' ? 'Open File' : entry.label));
     }
     if (opts.hasMore) buttons.append(actionButton('more', 'More', () => showMenuFor(node, row), 'action', 'More actions'));
     row.append(buttons);
@@ -120,7 +125,10 @@
 
   function showMenuFor(node, row, mouseEvent) {
     const options = [[node.phase === 'work' ? 'Stage' : 'Unstage', node.phase === 'work' ? 'stage' : 'unstage']];
-    if (node.kind === 'file') options.push(['Open Changes', 'diff'],
+    if (node.phase === 'work' && ['file', 'section'].includes(node.kind)) {
+      options.unshift([node.kind === 'file' ? 'Revert File Changes' : 'Revert All Changes', 'discard']);
+    }
+    if (node.kind === 'file') options.push(['Open File', 'openFile'], ['Open Changes', 'diff'],
       ['Move to Feature...', 'move'], ['Move to Component...', 'moveComponent'],
       ['Move to Task...', 'moveTask'], ['Reset Classification', 'reset']);
     if (node.kind === 'feature') options.push(['Use Feature Name as Commit Message', 'useMessage']);
@@ -274,6 +282,8 @@
   function appendFile(wrapper, root, phase, file, depth) {
     const fileNode = { kind: 'file', root, phase, path: file.path };
     const { row: fileRow } = rowWithActions(fileNode, `file-row depth-${depth}`, file.name, null, 'status', [
+      { icon: 'openFile', label: 'Open', action: 'openFile' },
+      ...(phase === 'work' ? [{ icon: 'discard', label: 'Revert', action: 'discard' }] : []),
       { icon: phase === 'work' ? 'add' : 'remove', label: phase === 'work' ? 'Stage file' : 'Unstage file', action: phase === 'work' ? 'stage' : 'unstage' }
     ], { status: file.status, detail: file.directory, hasMore: true,
       title: `${file.path} (${phase === 'work' ? 'unstaged' : 'staged'})` });
@@ -303,7 +313,8 @@
       const wrapper = element('section', 'section');
       const sectionNode = { kind: 'section', root, phase };
       const { row: sectionRow, closed } = rowWithActions(sectionNode, 'section-row', section.label, null,
-        'folder', [{ icon: phase === 'work' ? 'add' : 'remove',
+        'folder', [...(phase === 'work' ? [{ icon: 'discard', label: 'Revert', action: 'discard' }] : []),
+          { icon: phase === 'work' ? 'add' : 'remove',
           label: phase === 'work' ? 'Stage all changes' : 'Unstage all',
           action: phase === 'work' ? 'stage' : 'unstage' }],
         { expandable: true });

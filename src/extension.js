@@ -27,6 +27,7 @@ async function activate(context) {
     }
   });
   const documentProviders = [registerSnapshot('head'), registerSnapshot('index'), registerSnapshot('empty')];
+  const discarding = new Set();
 
   const invokeGit = async (root, changes, operation) => {
     if (!root || !changes?.length) return;
@@ -92,6 +93,57 @@ async function activate(context) {
     await invokeGit(selected.root, selected.changes, operation);
   };
 
+  const discardChanges = async selected => {
+    if (!selected || selected.phase !== 'work' || !['file', 'section'].includes(selected.kind)) return;
+    const { root } = selected;
+    if (!controller.repositories.some(repo => repo.root === root) || discarding.has(root)) return;
+    const changes = selected.kind === 'file' ? [selected.change] : selected.changes;
+    if (!changes?.length || changes.some(change => !change?.unstaged)) return;
+    const findDirtyEditor = () => (vscode.workspace.textDocuments || []).find(document =>
+      document.isDirty && document.uri?.scheme === 'file' &&
+      changes.some(change => document.uri.fsPath === path.resolve(root, change.path)));
+    discarding.add(root);
+    try {
+      if (findDirtyEditor()) {
+        void vscode.window.showWarningMessage('Save or close unsaved editor changes before reverting Git files.');
+        return;
+      }
+      const entireSection = selected.kind === 'section';
+      const snapshot = await git.discardSnapshot(root, changes, entireSection);
+      const untracked = changes.filter(change => change.untracked).length;
+      const target = entireSection ? `all ${changes.length} unstaged file(s) in ${path.basename(root)}` :
+        `unstaged changes in ${changes[0].path}`;
+      const detail = [
+        'Tracked files will be restored from the Git index; any staged changes will be kept.',
+        untracked ? `${untracked} untracked file(s) will be moved to Trash.` : '',
+        'Discarded tracked edits cannot be recovered through Git.'
+      ].filter(Boolean).join('\n');
+      const answer = await vscode.window.showWarningMessage(`Revert ${target}?`,
+        { modal: true, detail }, entireSection ? 'Revert All' : 'Revert');
+      if (answer !== (entireSection ? 'Revert All' : 'Revert')) return;
+
+      if (findDirtyEditor()) {
+        void vscode.window.showWarningMessage('An editor now has unsaved changes. Save or close it before reverting.');
+        return;
+      }
+
+      // Compare both the working file metadata and index before doing anything
+      // destructive. The user might have edited/staged while the dialog was open.
+      if (snapshot !== await git.discardSnapshot(root, changes, entireSection)) {
+        void vscode.window.showWarningMessage('Git changes have updated. Review the files and retry reverting.');
+        return;
+      }
+      await git.discardUnstaged(root, changes, filename =>
+        vscode.workspace.fs.delete(vscode.Uri.file(filename), { useTrash: true, recursive: false }));
+    } catch (error) {
+      controller.report(error, `Reverting changes in ${path.basename(root)}`);
+    } finally {
+      discarding.delete(root);
+      // Also refresh after partial failures or cancelled stale requests.
+      await controller.refresh();
+    }
+  };
+
   const moveFile = async node => {
     if (!node || node.kind !== 'file') return;
     if (controller.nameFor(node.root, node.change) === EXCLUDED_GROUP) {
@@ -147,6 +199,33 @@ async function activate(context) {
     catch (error) { controller.report(error, `Moving file to ${field}`); }
   };
 
+  const openFile = async node => {
+    if (node?.kind !== 'file' || !node.change || !['work', 'index'].includes(node.phase)) return;
+    const { root, change } = node;
+    if (!controller.repositories.some(repository => repository.root === root)) return;
+    // The Webview action is resolved against the live Git status. Also guard
+    // programmatic command calls from opening arbitrary paths outside the repo.
+    const filename = change.path;
+    if (typeof filename !== 'string' || !filename || path.isAbsolute(filename) || filename.includes('\0')) return;
+    const absolute = path.resolve(root, filename);
+    const relative = path.relative(path.resolve(root), absolute);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+    const uri = vscode.Uri.file(absolute);
+    try {
+      // Open the actual working-tree file, including when the row is staged.
+      // A pinned editor tab is distinct from the default click-to-diff action.
+      await vscode.workspace.fs.stat(uri);
+      await vscode.commands.executeCommand('vscode.open', uri, { preview: false });
+    } catch (error) {
+      if (error?.code === 'FileNotFound' || error?.code === 'ENOENT') {
+        void vscode.window.showInformationMessage(
+          `${filename} no longer exists in the working tree. Open its diff to see the previous version.`);
+      } else {
+        controller.report(error, `Opening ${filename}`);
+      }
+    }
+  };
+
   const openDiff = async node => {
     if (!node || node.kind !== 'file') return;
     const { root, change, phase } = node;
@@ -171,6 +250,7 @@ async function activate(context) {
   };
 
   const handleViewAction = async (action, node) => {
+    if (action === 'discard') return discardChanges(node);
     if (action === 'stage' || action === 'unstage') {
       const operation = action === 'stage' ? 'stage' : 'unstage';
       if (node.kind === 'file') return fileAction(operation, node);
@@ -178,6 +258,7 @@ async function activate(context) {
       if (node.kind === 'section') return sectionAction(operation, node);
     }
     if (action === 'diff') return openDiff(node);
+    if (action === 'openFile') return openFile(node);
     if (action === 'move') return moveFile(node);
     if (action === 'moveComponent') return moveDetail(node, 'component');
     if (action === 'moveTask') return moveDetail(node, 'task');
@@ -199,12 +280,15 @@ async function activate(context) {
     vscode.commands.registerCommand('aiFeatureGroups.unstageFeature', node => featureAction('unstage', node)),
     vscode.commands.registerCommand('aiFeatureGroups.stageSection', node => sectionAction('stage', node)),
     vscode.commands.registerCommand('aiFeatureGroups.unstageSection', node => sectionAction('unstage', node)),
+    vscode.commands.registerCommand('aiFeatureGroups.discardFile', node => discardChanges(node)),
+    vscode.commands.registerCommand('aiFeatureGroups.discardSection', node => discardChanges(node)),
 
     vscode.commands.registerCommand('aiFeatureGroups.moveToFeature', moveFile),
     vscode.commands.registerCommand('aiFeatureGroups.resetClassification', async node => {
       if (node?.kind === 'file') await controller.resetFile(node.root, node.change);
     }),
-    vscode.commands.registerCommand('aiFeatureGroups.openDiff', openDiff)
+    vscode.commands.registerCommand('aiFeatureGroups.openDiff', openDiff),
+    vscode.commands.registerCommand('aiFeatureGroups.openFile', openFile)
   ];
 
   context.subscriptions.push(output, ...documentProviders, ...commands, controller);
